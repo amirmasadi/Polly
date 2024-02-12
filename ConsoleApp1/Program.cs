@@ -1,6 +1,7 @@
 ﻿using Polly;
 using Polly.CircuitBreaker;
 using Polly.Fallback;
+using Polly.Hedging;
 using Polly.RateLimit;
 using Polly.Retry;
 using Polly.Timeout;
@@ -20,7 +21,9 @@ internal class Program
     {
         string url = "https://scrapeme.live/shop/asd";
         /*RetryStrategy(url);*/
-        FallbackAfterRetries();
+        /*FallbackAfterRetries();*/
+        /*TimeoutStrategy();*/
+        Console.ReadKey();
     }
 
     async public static void RetryStrategy(string url)
@@ -50,6 +53,8 @@ internal class Program
             pipeline.Execute(() => new HttpResponseMessage(HttpStatusCode.InternalServerError));
         }
     }
+
+    //https://www.pollydocs.org/strategies/fallback#fallback-after-retries
     public static void FallbackAfterRetries()
     {
         // Define a common predicates re-used by both fallback and retries
@@ -95,5 +100,50 @@ internal class Program
     private static HttpResponseMessage ResolveFallbackResponse(Outcome<HttpResponseMessage> outcome)
     {
         return new HttpResponseMessage(HttpStatusCode.OK);
+    }
+
+
+
+    public static void HedgingStrategy()
+    {
+        // A customized hedging strategy that retries up to 3 times if the execution
+        // takes longer than 1 second or if it fails due to an exception or returns an HTTP 500 Internal Server Error.
+        var optionsComplex = new HedgingStrategyOptions<HttpResponseMessage>
+        {
+            ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                .HandleResult(response => response.StatusCode == HttpStatusCode.InternalServerError),
+            MaxHedgedAttempts = 3,
+            Delay = TimeSpan.FromSeconds(1),
+            ActionGenerator = static args =>
+            {
+                Console.WriteLine("Preparing to execute hedged action.");
+
+                // Return a delegate function to invoke the original action with the action context.
+                // Optionally, you can also create a completely new action to be executed.
+                return () => args.Callback(args.ActionContext);
+            }
+        };
+        var pipeline = new ResiliencePipelineBuilder<HttpResponseMessage>().AddHedging(optionsComplex).Build();
+        pipeline.Execute(() => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+    }
+
+    public static void TimeoutStrategy()
+    {
+        var optionsOnTimeout = new TimeoutStrategyOptions
+        {
+            TimeoutGenerator = static args =>
+            {
+                // Note: the timeout generator supports asynchronous operations
+                return new ValueTask<TimeSpan>(TimeSpan.FromSeconds(2));
+            },
+            OnTimeout = static args =>
+            {
+                Console.WriteLine($"Execution timed out after {args.Timeout.TotalSeconds} seconds.");
+                return default;
+            }
+        };
+        var pipeline = new ResiliencePipelineBuilder().AddTimeout(optionsOnTimeout).Build();
+
+        pipeline.ExecuteAsync(static async innerToken => await Task.Delay(TimeSpan.FromSeconds(3), innerToken));
     }
 }
